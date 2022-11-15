@@ -1,0 +1,468 @@
+---
+title: "Stat 442 Final Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Data Input and Cleaning
+
+```{r}
+f_one <- read.csv("/Users/jackforrest/Downloads/cleaned-data (1).csv")
+f_one$podium <- ifelse(f_one$final_pos <= 3, 1, 0)
+f_one$podium <- as.factor(f_one$podium)
+f_one[is.na(f_one)] <- 0
+f_one$points_before <- f_one$cumulative_points_including_this_race - f_one$points_from_this_race
+f_one <- f_one[, -c(1,13:16,19)]
+f_one$after_five <- ifelse(f_one$race_year >= 2005, "Yes", "No")
+f_one_before <- f_one[f_one$after_five == "No",]
+f_one_after <- f_one[f_one$after_five == "Yes",]
+dt1 = sort(sample(nrow(f_one_before), nrow(f_one_before)*.7))
+dt2 = sort(sample(nrow(f_one_after), nrow(f_one_after)*.7))
+train_before <- f_one_before[dt1,]
+test_before <- f_one_before[-dt1,]
+train_after <- f_one_after[dt2,]
+test_after <- f_one_after[-dt2,]
+```
+
+
+
+```{r}
+library("ggfortify")
+pca_train <- prcomp(f_one[,-c(10:14,16:18)], scale. = TRUE)
+summary(pca_train)
+```
+
+```{r}
+autoplot(pca_train, data = f_one,
+loadings = TRUE , colour = "podium",loadings.colour = 'blue' , loadings.label =TRUE ,loadings.label.size =3)
+```
+
+```{r}
+autoplot(pca_train, data = f_one,
+loadings = TRUE , colour = "race_year",loadings.colour = 'blue' , loadings.label =TRUE ,loadings.label.size =3)
+```
+
+
+```{r}
+train_before <- train_before[-c(8,9, 18)] # drop q2, q3, and after_five -- no data
+test_before <- test_before[-c(8,9, 18)]
+```
+
+```{r}
+train_after <- train_after[-18]
+test_after <- test_after[-18]
+```
+
+
+## dropping categorical columns bc it causes problems **
+these are race_track, company, nationality, driver_name
+```{r}
+train_before <- train_before[-c(9:12)]
+test_before <- test_before[-c(9:12)]
+
+train_after <- train_after[-c(11:14)]
+test_after <- test_after[-c(11:14)]
+```
+
+
+#Logistic Before and After
+
+```{r}
+logit_before <- glm(podium ~. , data = train_before, family = "binomial")
+summary(logit_before)
+pred_before <- predict(logit_before, newdata = test_before, type = "response") > 0.5
+table(pred_before, test_before$podium, dnn = c("In-sample Predicton", "Truth"))
+accuracyB <- (510 + 53)/ (510 + 53 + 32 + 17)
+accuracyB
+```
+
+
+```{r}
+logit_after <- glm(podium ~. , data = train_after, family = "binomial")
+summary(logit_after)
+pred_after <- predict(logit_after, newdata = test_after, type = "response") > 0.5
+table(pred_after, test_after$podium, dnn = c("Out-sample Predicton", "Truth"))
+accuracyA <- (1709 + 174)/ (1709 + 174 + 67 + 125)
+accuracyA
+```
+
+#Trees Before and After
+
+```{r}
+library(tree)
+set.seed(442)
+tree_bf <- tree(podium ~., data=train_before)
+plot(tree_bf)
+text(tree_bf, pretty = 0)
+```
+
+```{r}
+pred_tree1 <- predict(tree_bf, newdata = test_before, type = "class")
+mse_treeB <- mean((pred_tree1 == test_before$podium))
+mse_treeB
+```
+
+
+```{r}
+set.seed(442)
+tree_af <- tree(podium ~., data=train_after)
+plot(tree_af)
+text(tree_af, pretty = 0)
+```
+```{r}
+pred_tree2 <- predict(tree_af, newdata = test_after, type = "class")
+mse_treeA <- mean((pred_tree2 == test_after$podium))
+mse_treeA
+```
+#Prune Trees Before
+```{r}
+set.seed(442)
+cv_tree_bf <- cv.tree(tree_bf, FUN = prune.misclass)
+cv_tree_bf
+size_cv <- cv_tree_bf$size[which.min(cv_tree_bf$dev)]
+size_cv
+```
+
+```{r}
+tree_bf_prune <- prune.misclass(tree_bf, best = size_cv)
+pred_tree2 <- predict(tree_bf_prune, newdata = test_before, type = "class")
+mse_tree_prune_b <- mean((pred_tree2 == test_before$podium))
+mse_tree_prune_b
+```
+
+#Prune Trees After
+
+```{r}
+set.seed(442)
+cv_tree_af <- cv.tree(tree_af, FUN = prune.misclass)
+cv_tree_af
+size_cv2 <- cv_tree_af$size[which.min(cv_tree_af$dev)]
+size_cv2
+```
+
+```{r}
+tree_af_prune <- prune.misclass(tree_af, best = size_cv2)
+pred_tree3 <- predict(tree_af_prune, newdata = test_after, type = "class")
+mse_tree_prune_af <- mean((pred_tree3 == test_after$podium))
+mse_tree_prune_af
+```
+
+#Bagging Before and After
+
+```{r}
+library(randomForest)
+set.seed(442)
+bf_bag <- randomForest(as.factor(podium) ~., data = train_before, ntree=500, mtry=ncol(train_before)-1)
+plot(bf_bag$err.rate[,1], type="l")
+```
+
+```{r}
+set.seed(442)
+bf_bag1 <- randomForest(as.factor(podium)~., data = train_before,
+mtry=ncol(train_before)-1, ntree = 150)
+pred_bag <- predict(bf_bag1, newdata = test_before)
+mse_bag_bef <- mean((pred_bag == test_before$podium))
+mse_bag_bef
+```
+
+#Important Variable Plot Before
+```{r}
+varImpPlot(bf_bag1)
+```
+
+```{r}
+library(randomForest)
+set.seed(442)
+af_bag <- randomForest(as.factor(podium) ~., data = train_after, ntree=500, mtry=ncol(train_after)-1)
+plot(af_bag$err.rate[,1], type="l")
+```
+
+```{r}
+set.seed(442)
+af_bag2 <- randomForest(as.factor(podium)~., data = train_after,
+mtry=ncol(train_after)-1, ntree = 200)
+pred_bag2 <- predict(af_bag2, newdata = test_after)
+mse_bag_af <- mean((pred_bag2 == test_after$podium))
+mse_bag_af
+```
+
+
+#Important Variable Plot After
+```{r}
+varImpPlot(af_bag2)
+```
+
+#Random Forest Before and After
+
+```{r}
+set.seed(442)
+fone_rf <- randomForest(as.factor(podium)~., data = train_before)
+plot(fone_rf$err.rate[,1], type="l")
+```
+
+```{r}
+set.seed(442)
+fone_rf1 <- randomForest(as.factor(podium)~., data = train_before, ntree=100)
+fone_rf1$mtry
+```
+
+```{r}
+pred_rf <- predict(fone_rf1, newdata = test_before)
+mse_rf_bef <- mean(pred_rf == test_before$podium)
+mse_rf_bef
+```
+
+
+```{r}
+set.seed(442)
+fone_rf_a <- randomForest(as.factor(podium)~., data = train_after)
+plot(fone_rf_a$err.rate[,1], type="l")
+```
+
+```{r}
+set.seed(442)
+fone_rf2 <- randomForest(as.factor(podium)~., data = train_after, ntree=150)
+fone_rf2$mtry
+```
+
+
+```{r}
+pred_rf2 <- predict(fone_rf2, newdata = test_after)
+mse_rf_after <- mean(pred_rf2 == test_after$podium)
+mse_rf_after
+```
+
+#Boosting Before and After
+
+```{r}
+library(gbm)
+set.seed(442) #
+fone_boost <- gbm(
+formula = podium ~. , ## response needs to be 0/1
+distribution = "bernoulli",
+data = train_before,
+n.trees = 1000,
+shrinkage = 0.1, ## step size/learning rate, typical 0.001 - 3
+interaction.depth = 3 ## tree depth each time
+)
+```
+
+```{r}
+pred_boost_prob <- predict(fone_boost, newdata = test_before, type="response")
+pred_boost <- pred_boost_prob > 0.5
+mean(pred_boost == test_before$podium)
+```
+
+
+```{r}
+set.seed(442) #
+fone_boost_after <- gbm(
+formula = podium ~. , ## response needs to be 0/1
+distribution = "bernoulli",
+data = train_after,
+n.trees = 1000,
+shrinkage = 0.1, ## step size/learning rate, typical 0.001 - 3
+interaction.depth = 3 ## tree depth each time
+)
+```
+
+```{r}
+pred_boost_prob_after <- predict(fone_boost_after, newdata = test_after, type="response")
+pred_boost_after <- pred_boost_prob_after > 0.5
+mean(pred_boost_after == test_after$podium)
+```
+# KNN before and after *slow*
+
+
+
+```{r, warning=FALSE}
+library(kknn)
+library(caret)
+set.seed(442)
+knn_before_CV <- train(podium ~ .,
+                       method = "kknn",
+                      trControl = trainControl(method = "cv", number = 5),
+                      tuneGrid=expand.grid(kmax = 1:20,
+                                           distance=2,
+                                           kernel=c("gaussian", "rectangular")),
+                      data = train_before)
+
+
+knn_before_best_fit <- kknn(podium ~ ., train = train_before, test = test_before, 
+                            k = knn_before_CV$bestTune$kmax, kernel = as.character(knn_before_CV$bestTune$kernel))
+preds <- predict(knn_before_best_fit, newdata=test_before)
+res_knn_b4 <- mean(preds == test_before$podium)
+res_knn_b4
+```
+
+
+```{r, warning=FALSE}
+set.seed(442)
+knn_after_CV <- train(podium ~ .,
+                       method = "kknn",
+                      trControl = trainControl(method = "cv", number = 5),
+                      tuneGrid=expand.grid(kmax = 1:10,
+                                           distance=2,
+                                           kernel=c("gaussian", "rectangular")),
+                      data = train_after)
+
+
+knn_after_best_fit <- kknn(podium ~ ., train = train_after, test = test_after, 
+                            k = knn_after_CV$bestTune$kmax, kernel = as.character(knn_after_CV$bestTune$kernel))
+preds <- predict(knn_after_best_fit, newdata=test_after)
+res_knn_after <- mean(preds == test_after$podium)
+res_knn_after
+```
+
+
+```{r}
+as.character(knn_before_CV$bestTune$kernel)
+as.character(knn_after_CV$bestTune$kernel)
+```
+
+## LDA -- before & after
+
+```{r}
+library(MASS)
+lda_b4 <- lda(podium ~.,
+                 data = train_before, prior = rep(1, 2)/2)
+preds <- predict(lda_b4, test_before)
+res_lda_b4 <- mean(preds$class == test_before$podium)
+res_lda_b4
+```
+
+```{r}
+lda_after <- lda(podium ~.,
+                 data = train_after, prior = rep(1, 2)/2)
+preds <- predict(lda_after, test_after)
+res_lda_after <- mean(preds$class == test_after$podium)
+res_lda_after
+```
+
+## QDA -- Before & After
+
+```{r}
+qda_b4 <- qda(podium ~.,
+                 data = train_before, prior = rep(1, 2)/2)
+preds <- predict(qda_b4, test_before)
+res_qda_b4 <- mean(preds$class == test_before$podium)
+res_qda_b4
+```
+
+```{r}
+qda_after <- qda(podium ~.,
+                 data = train_after, prior = rep(1, 2)/2)
+preds <- predict(qda_after, test_after)
+res_qda_after <- mean(preds$class == test_after$podium)
+res_qda_after
+```
+
+
+## SVC -- before & after
+```{r, warning=FALSE}
+library(kernlab)
+set.seed(442)
+train_control <- trainControl(method="cv", number=5)
+cv_svc_b4 <- train(as.factor(podium) ~., data = train_before,
+                method = "svmLinear",
+                trControl = train_control,
+                preProcess = c("center","scale"), ## standardize data
+                tuneGrid = expand.grid(C = seq(0.1, 10, length = 20)))
+
+
+set.seed(442)
+svc_b4_cv5 <- ksvm(as.factor(podium)~., data=train_before,
+                     kernel=vanilladot(), C=cv_svc_b4$bestTune,
+                     prob.model=T)
+preds <- predict(svc_b4_cv5, test_before)
+res_svc_b4 <- mean(preds == test_before$podium)
+res_svc_b4
+```
+
+```{r}
+cv_svc_after$bestTune
+cv_svc_b4$bestTune
+```
+
+
+```{r, warning=FALSE}
+set.seed(442)
+train_control <- trainControl(method="cv", number=5)
+cv_svc_after <- train(as.factor(podium) ~., data = train_after,
+                method = "svmLinear",
+                trControl = train_control,
+                preProcess = c("center","scale"), ## standardize data
+                tuneGrid = expand.grid(C = seq(0.1, 10, length = 20)))
+
+
+set.seed(442)
+svc_after_cv5 <- ksvm(as.factor(podium)~., data=train_after,
+                     kernel=vanilladot(), C=cv_svc_after$bestTune,
+                     prob.model=T)
+preds <- predict(svc_after_cv5, test_after)
+res_svc_after <- mean(preds == test_after$podium)
+res_svc_after
+```
+
+## results
+```{r}
+results <- data.frame(Before = c(res_knn_b4, res_lda_b4, res_qda_b4, res_svc_b4, accuracyB, mse_treeB, mse_tree_prune_b, mse_bag_bef, mse_rf_bef) , 
+                 After = c(res_knn_after, res_lda_after, res_qda_after, res_svc_after, accuracyA, mse_treeA, mse_tree_prune_af, mse_bag_af, mse_rf_after))
+rownames(results) <- c("KNN", "LDA", "QDA", "SVC", "Logistic", "Trees", "Pruned Trees", "Bagging", "Random Forest")
+results
+```
+
+```{r, message=FALSE}
+library(pROC)
+pred_knn <- predict(knn_before_best_fit, newdata=test_before, type = "prob")
+pred_lda <- predict(lda_b4, test_before)
+pred_qda <- predict(qda_b4, test_before)
+pred_svc <- predict(svc_b4_cv5, test_before, type="prob")
+pred_logit <- predict(logit_before, test_before, type = "response")
+pred_tree <- predict(tree_bf, test_before)
+pred_rf <- predict(fone_rf1, test_before, type = "prob")
+pred_bag <- predict(bf_bag1, test_before, type = "prob")
+df_roc_before <- data.frame(podium = test_before$podium,
+                                   knn = pred_knn[,1],
+                                   lda = pred_lda$posterior[,2],
+                                   qda = pred_qda$posterior[,2],
+                                   svc = pred_svc[,2],
+                          logit = pred_logit,
+                          tree = pred_tree[,2],
+                          rf = pred_rf[,2],
+                          bag = pred_bag[,2]
+                            )
+
+
+
+rocobj_before <- roc(podium ~ ., data = df_roc_before)
+ggroc(rocobj_before)
+```
+
+
+```{r, message=FALSE}
+pred_knn <- predict(knn_after_best_fit, newdata=test_after, type = "prob")
+pred_lda <- predict(lda_after, test_after)
+pred_qda <- predict(qda_after, test_after)
+pred_svc <- predict(svc_after_cv5, test_after, type="prob")
+pred_logit <- predict(logit_after, test_after, type = "response")
+pred_tree <- predict(tree_af, test_after)
+pred_rf <- predict(fone_rf2, test_after, type = "prob")
+pred_bag <- predict(af_bag2, test_after, type = "prob")
+df_roc_after <- data.frame(podium = test_after$podium,
+                                   knn = pred_knn[,1],
+                                   lda = pred_lda$posterior[,2],
+                                   qda = pred_qda$posterior[,2],
+                                   svc = pred_svc[,2],
+                           logit = pred_logit,
+                          tree = pred_tree[,2],
+                          rf = pred_rf[,2],
+                          bag = pred_bag[,2])
+
+
+rocobj_after <- roc(podium ~ ., data = df_roc_after)
+ggroc(rocobj_after)
+```
